@@ -3,6 +3,8 @@ from numpy.random import RandomState
 import pandas as pd
 import matplotlib.pyplot as plt
 from tqdm import trange
+import os
+import json
 
 import torch
 import torch.nn as nn
@@ -12,7 +14,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.models.base import Recommender
 from src.evaluator import Evaluator
 
-class DLCE_Torch(Recommender, nn.Module):
+class DLCE(Recommender, nn.Module):
     def __init__(self, num_users, num_items,
                  dim_factor=200, metric='upper_bound_log',
                  learn_rate=0.01, reg_factor=0.01, reg_bias=0.01,
@@ -20,6 +22,7 @@ class DLCE_Torch(Recommender, nn.Module):
                  omega=0.05, xT=0.01, xC=0.01,
                  with_bias=True, with_outcome=False, only_treated=False, tau_mode='cips',
                  seed=None, device='cuda',
+                 measures=['CPrec_10', 'CPrec_100', 'CDCG_100', 'CDCG'],
                  colname_user='idx_user', colname_item='idx_item',
                  colname_outcome='outcome', colname_prediction='pred',
                  colname_treatment='treated', colname_propensity='propensity'):
@@ -45,7 +48,8 @@ class DLCE_Torch(Recommender, nn.Module):
         self.device = torch.device(device)
         self.tau_mode = tau_mode
 
-        torch.manual_seed(seed or 42)
+        self.seed = seed
+        torch.manual_seed(self.seed or 42)
 
         self.user_factors = nn.Embedding(num_users, dim_factor)
         self.item_factors = nn.Embedding(num_items, dim_factor)
@@ -57,7 +61,7 @@ class DLCE_Torch(Recommender, nn.Module):
 
         self.history = []
         self.to(self.device)
-        self.measures = ['CPrec_10', 'CPrec_100', 'CDCG_100', 'CDCG']
+        self.measures = measures
 
     def forward(self, u, i, j):
         user_vec = self.user_factors(u)
@@ -245,3 +249,80 @@ class DLCE_Torch(Recommender, nn.Module):
 
         plt.tight_layout()
         plt.show()
+
+
+    def save_model(self, dir_path="saved_models/dlce", model_name="dlce_model"):
+        path = os.path.join(dir_path, model_name) 
+        os.makedirs(path, exist_ok=True)
+
+        # 1. Сохраняем веса
+        weights_path = os.path.join(path, f"weights.pt")
+        torch.save(self.state_dict(), weights_path)
+
+        # 2. Сохраняем параметры модели
+        config = {
+            "num_users": self.num_users,
+            "num_items": self.num_items,
+            "dim_factor": self.dim_factor,
+            "metric": self.metric,
+            "learn_rate": self.learn_rate,
+            "reg_factor": self.reg_factor,
+            "reg_bias": self.reg_bias,
+            "capping_T": self.capping_T,
+            "capping_C": self.capping_C,
+            "omega": self.omega,
+            "xT": self.xT,
+            "xC": self.xC,
+            "with_bias": self.with_bias,
+            "with_outcome": self.with_outcome,
+            "only_treated": self.only_treated,
+            "tau_mode": self.tau_mode,
+            "seed" : self.seed,
+            "device": str(self.device),
+            "measures" : self.measures
+
+        }
+
+        config_path = os.path.join(path, f"config.json")
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=4)
+
+        # 3. Сохраняем историю обучения
+        if hasattr(self, "history") and self.history:
+            history_path = os.path.join(path, f"history.csv")
+            pd.DataFrame(self.history).to_csv(history_path, index=False)
+
+        print(f"Model saved to: {path}")
+
+    
+    @classmethod
+    def load_model(cls, dir_path="saved_models/dlce", model_name="dlce", device='cuda'):
+        """
+        Восстанавливает модель DLCE по названию: структуру, веса и историю.
+        """
+        
+        path = os.path.join(dir_path, model_name) 
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Путь {path} не существует.")
+    
+        config_path = os.path.join(path, f"config.json")
+        weights_path = os.path.join(path, f"weights.pt")
+        history_path = os.path.join(path, f"history.csv")
+
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        config["device"] = device
+        model = cls(**config)
+
+        # Загружаем веса
+        model.load_state_dict(torch.load(weights_path, map_location=device))
+        model.to(model.device)
+        model.eval()
+
+        # Загружаем историю
+        if os.path.exists(history_path):
+            model.history = pd.read_csv(history_path).to_dict(orient="records")
+
+        return model
+
