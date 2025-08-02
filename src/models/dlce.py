@@ -18,7 +18,6 @@ class DLCE(Recommender, nn.Module):
     def __init__(self, num_users, num_items,
                  dim_factor=200, metric='upper_bound_log',
                  learn_rate=0.01, reg_factor=0.01, reg_bias=0.01,
-                 capping_T=0.01, capping_C=0.01,
                  omega=0.05, xT=0.01, xC=0.01,
                  with_bias=True, with_outcome=False, only_treated=False, tau_mode='cips',
                  seed=None, device='cuda',
@@ -37,8 +36,6 @@ class DLCE(Recommender, nn.Module):
         self.learn_rate = learn_rate
         self.reg_factor = reg_factor
         self.reg_bias = reg_bias
-        self.capping_T = capping_T
-        self.capping_C = capping_C
         self.omega = omega
         self.xT = xT
         self.xC = xC
@@ -135,8 +132,8 @@ class DLCE(Recommender, nn.Module):
         if self.tau_mode == 'cips':
             prop = df_train['propensity']
             treat = df_train['treated']
-            df_train.loc[(treat == 1) & (prop < self.capping_T), 'propensity'] = self.capping_T
-            df_train.loc[(treat == 0) & (prop > 1 - self.capping_C), 'propensity'] = 1 - self.capping_C
+            df_train.loc[(treat == 1) & (prop < self.xT), 'propensity'] = self.xT
+            df_train.loc[(treat == 0) & (prop > 1 - self.xC), 'propensity'] = 1 - self.xC
 
         u = torch.LongTensor(df_train['idx_user'].values)
         i = torch.LongTensor(df_train['idx_item'].values)
@@ -268,8 +265,6 @@ class DLCE(Recommender, nn.Module):
             "learn_rate": self.learn_rate,
             "reg_factor": self.reg_factor,
             "reg_bias": self.reg_bias,
-            "capping_T": self.capping_T,
-            "capping_C": self.capping_C,
             "omega": self.omega,
             "xT": self.xT,
             "xC": self.xC,
