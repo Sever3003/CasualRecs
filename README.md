@@ -20,14 +20,14 @@
 
 1. Помести файлы с данными в папку: `./data/raw/`.
 2. Запусти `src/data/data.ipynb` и выполни все ячейки.
-3. Результатом станут четыре подготовленных CSV‑файла, размещённые в папке `data/preprocessed/`:
+3. Результатом станут четыре подготовленных папки с CSV‑файлами, размещённые в папке `data/preprocessed/`:
 
 | Набор данных               | Файл                                   |
 |---------------------------|----------------------------------------|
-| Category‑Original         | `data/preprocessed/dunn_cat_mailer_10_10_1_1/original_rp0.40.csv` |
-| Category‑Personalized     | `data/preprocessed/dunn_cat_mailer_10_10_1_1/rank_rp0.40_sf2.00_nr210.csv` |
-| Product‑Original          | `data/preprocessed/dunn_mailer_10_10_1_1/original_rp0.90.csv` |
-| Product‑Personalized      | `data/preprocessed/dunn_mailer_10_10_1_1/rank_rp0.90_sf2.00_nr991.csv` |
+| Category‑Original         | `data/preprocessed/dunn_cat_mailer_10_10_1_1/original_rp0.40` |
+| Category‑Personalized     | `data/preprocessed/dunn_cat_mailer_10_10_1_1/rank_rp0.40_sf2.00_nr210` |
+| Product‑Original          | `data/preprocessed/dunn_mailer_10_10_1_1/original_rp0.90` |
+| Product‑Personalized      | `data/preprocessed/dunn_mailer_10_10_1_1/rank_rp0.90_sf2.00_nr991` |
 
 📌 **Замечание**: эти пути основаны на фактической структуре после запуска `data.ipynb`.
 
