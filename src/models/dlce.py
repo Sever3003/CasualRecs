@@ -16,10 +16,10 @@ from src.evaluator import Evaluator
 
 class DLCE(Recommender, nn.Module):
     def __init__(self, num_users, num_items,
-                 dim_factor=200, metric='upper_bound_log',
-                 learn_rate=0.01, reg_factor=0.01, reg_bias=0.01,
+                 dim_factor=100, metric='upper_bound_log',
+                 learn_rate=0.001, reg_factor=0.01, reg_bias=0.01,
                  omega=0.05, xT=0.01, xC=0.01,
-                 with_bias=True, with_outcome=False, only_treated=False, tau_mode='cips',
+                 with_bias=True, with_outcome=True, only_treated=True, tau_mode='cips',
                  seed=None, device='cuda',
                  measures=['CPrec_10', 'CPrec_100', 'CDCG_100', 'CDCG'],
                  colname_user='idx_user', colname_item='idx_item',
@@ -108,11 +108,25 @@ class DLCE(Recommender, nn.Module):
 
         elif self.metric == 'upper_bound_hinge':
             loss = torch.zeros_like(s_uij)
+
             pos_mask_hinge = (z == 1) & (s_uij < 1 / self.omega)
             neg_mask_hinge = (z == 0) & (s_uij > -1 / self.omega)
+
+            if self.tau_mode == 'cips':
+                pos_weight = y[pos_mask_hinge] / torch.clamp(p[pos_mask_hinge], min=self.xT)
+                neg_weight = y[neg_mask_hinge] / torch.clamp(1 - p[neg_mask_hinge], min=self.xC)
+            elif self.tau_mode == 'ips':
+                pos_weight = y[pos_mask_hinge] / p[pos_mask_hinge]
+                neg_weight = y[neg_mask_hinge] / (1 - p[neg_mask_hinge])
+            elif self.tau_mode == 'naive':
+                pos_weight = y[pos_mask_hinge]
+                neg_weight = y[neg_mask_hinge]
+
             loss[pos_mask_hinge] = pos_weight * (1 - self.omega * s_uij[pos_mask_hinge])
             loss[neg_mask_hinge] = neg_weight * (1 + self.omega * s_uij[neg_mask_hinge])
+
             loss = loss.sum()
+
 
         return loss
 
@@ -141,22 +155,20 @@ class DLCE(Recommender, nn.Module):
         z = torch.LongTensor(df_train['treated'].values)
         p = torch.FloatTensor(df_train['propensity'].values)
 
+        dataset = TensorDataset(u, i, y, z, p)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learn_rate)
 
-        for epoch in range(n_epochs):
+        for epoch in trange(n_epochs, desc=f"DLCE", leave=False, ncols=80):
             total_loss = 0.0
             self.train()
 
-            j = torch.randint(0, self.num_items, i.shape)
-            j[i == j] = (j[i == j] + 1) % self.num_items
-
-            dataset = TensorDataset(u, i, j, y, z, p)
-            dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-
             for batch in dataloader:
-                u_b, i_b, j_b, y_b, z_b, p_b = [x.to(self.device) for x in batch]
+                u_b, i_b, y_b, z_b, p_b = [x.to(self.device) for x in batch]
+
+                j_b = torch.randint(0, self.num_items, i_b.shape).to(self.device)
+                j_b[i_b == j_b] = (j_b[i_b == j_b] + 1) % self.num_items
 
                 optimizer.zero_grad()
                 s_uij = self.forward(u_b, i_b, j_b)
@@ -252,37 +264,34 @@ class DLCE(Recommender, nn.Module):
         path = os.path.join(dir_path, model_name) 
         os.makedirs(path, exist_ok=True)
 
-        # 1. Сохраняем веса
         weights_path = os.path.join(path, f"weights.pt")
         torch.save(self.state_dict(), weights_path)
 
-        # 2. Сохраняем параметры модели
         config = {
-            "num_users": self.num_users,
-            "num_items": self.num_items,
-            "dim_factor": self.dim_factor,
-            "metric": self.metric,
-            "learn_rate": self.learn_rate,
-            "reg_factor": self.reg_factor,
-            "reg_bias": self.reg_bias,
-            "omega": self.omega,
-            "xT": self.xT,
-            "xC": self.xC,
-            "with_bias": self.with_bias,
-            "with_outcome": self.with_outcome,
-            "only_treated": self.only_treated,
-            "tau_mode": self.tau_mode,
-            "seed" : self.seed,
+            "num_users": int(self.num_users),
+            "num_items": int(self.num_items),
+            "dim_factor": int(self.dim_factor),
+            "metric": str(self.metric),
+            "learn_rate": float(self.learn_rate),
+            "reg_factor": float(self.reg_factor),
+            "reg_bias": float(self.reg_bias),
+            "omega": float(self.omega),
+            "xT": float(self.xT),
+            "xC": float(self.xC),
+            "with_bias": bool(self.with_bias),
+            "with_outcome": bool(self.with_outcome),
+            "only_treated": bool(self.only_treated),
+            "tau_mode": str(self.tau_mode),
+            "seed": int(self.seed) if self.seed is not None else None,
             "device": str(self.device),
-            "measures" : self.measures
-
+            "measures": list(map(str, self.measures))
         }
+
 
         config_path = os.path.join(path, f"config.json")
         with open(config_path, "w") as f:
             json.dump(config, f, indent=4)
 
-        # 3. Сохраняем историю обучения
         if hasattr(self, "history") and self.history:
             history_path = os.path.join(path, f"history.csv")
             pd.DataFrame(self.history).to_csv(history_path, index=False)
@@ -310,12 +319,10 @@ class DLCE(Recommender, nn.Module):
         config["device"] = device
         model = cls(**config)
 
-        # Загружаем веса
         model.load_state_dict(torch.load(weights_path, map_location=device))
         model.to(model.device)
         model.eval()
 
-        # Загружаем историю
         if os.path.exists(history_path):
             model.history = pd.read_csv(history_path).to_dict(orient="records")
 
