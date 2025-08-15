@@ -29,13 +29,19 @@ class PropCare(Recommender, nn.Module):
                              colname_treatment='treated',
                              colname_propensity='propensity')
         nn.Module.__init__(self)
+        
+        self.seed = getattr(args, "seed", 42)
+        torch.manual_seed(self.seed)
+
 
         self.device = device
         self.dimension = args.dimension
         self.estimator_layer_units = args.estimator_layer_units
         self.embedding_layer_units = args.embedding_layer_units
         self.lambda_1 = args.lambda_1
+        self.lambda_2 = getattr(args, "lambda_2", 1e-4)
         self.lr = args.lr
+        self.ablation_mode = getattr(args, "ablation_mode", "default")  # "NEG", "S1", "NO_P", "NO_R", "NO_P_R"
 
         self.norm_mean = None
         self.norm_std = None
@@ -118,27 +124,50 @@ class PropCare(Recommender, nn.Module):
         _, p_i, r_i = self(u, i)
         _, p_j, r_j = self(u, j)
 
+        # Основная бинарная клик-вероятность (p * r)
         click_pred = p_i * r_i
         click_loss = F.binary_cross_entropy(click_pred, y.unsqueeze(1))
 
+        # Разности популярности
         pop_i = self.item_popularity[i]
         pop_j = self.item_popularity[j]
         sgn = torch.sign(pop_i - pop_j).unsqueeze(1).to(self.device)
+
+        if self.ablation_mode == "NEG":
+            sgn = -sgn
+
         p_diff = sgn * (p_i - p_j)
         r_diff = sgn * (r_j - r_i)
-        weight = torch.exp(-self.exp_weight * (click_pred - p_j * r_j).pow(2))
-        pair_loss = -torch.mean(weight * (F.logsigmoid(p_diff) + F.logsigmoid(r_diff)))
 
+        # Веса для парной функции потерь
+        if self.ablation_mode == "S1":
+            weight = 1.0
+        else:
+            weight = torch.exp(-self.exp_weight * (click_pred - p_j * r_j).pow(2))
+
+        # Парная функция потерь (в зависимости от режима)
+        if self.ablation_mode == "NO_P":
+            pair_loss = -torch.mean(weight * F.logsigmoid(r_diff))
+        elif self.ablation_mode == "NO_R":
+            pair_loss = -torch.mean(weight * F.logsigmoid(p_diff))
+        elif self.ablation_mode == "NO_P_R":
+            pair_loss = torch.tensor(0.0, device=self.device)
+        else:  # default, NEG, S1
+            pair_loss = -torch.mean(weight * (F.logsigmoid(p_diff) + F.logsigmoid(r_diff)))
+
+        # KL-регуляризация через бета-распределение
         beta_dist = torch.distributions.Beta(self.alpha, self.beta)
         q_i = torch.sort(beta_dist.sample(p_i.shape).to(self.device), dim=0).values
         q_j = torch.sort(beta_dist.sample(p_j.shape).to(self.device), dim=0).values
         reg = F.kl_div(p_i.log(), q_i, reduction='batchmean') + F.kl_div(p_j.log(), q_j, reduction='batchmean')
 
-        loss = click_loss + self.lambda_1 * pair_loss + 1e-4 * reg
+        # Общая функция потерь
+        loss = click_loss + self.lambda_1 * pair_loss + self.lambda_2 * reg
         loss.backward()
         self.optimizer.step()
 
         return loss.item()
+
 
     def fit(self, train_df, vali_df, batch_size=4096, epochs=10):
         best_corr = -np.inf
@@ -321,10 +350,12 @@ class PropCare(Recommender, nn.Module):
             "embedding_layer_units": self.embedding_layer_units,
             "estimator_layer_units": self.estimator_layer_units,
             "lambda_1": self.lambda_1,
+            "lambda_2": self.lambda_2,
             "lr": self.lr,
             "norm_mean": self.norm_mean,
             "norm_std": self.norm_std,
-            "device": str(self.device)
+            "device": str(self.device),
+            "seed": int(self.seed) if self.seed is not None else None
         }
 
         config_path = os.path.join(path, "config.json")
@@ -363,6 +394,9 @@ class PropCare(Recommender, nn.Module):
             item_popularity=item_popularity,
             device=device
         )
+
+        model.norm_mean = config.get("norm_mean", None)
+        model.norm_std = config.get("norm_std", None)
 
         weights_path = os.path.join(path, "weights.pt")
         model.load_state_dict(torch.load(weights_path, map_location=device))
