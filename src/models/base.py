@@ -1,6 +1,8 @@
 import numpy as np
 import pandas as pd
 import random
+import os
+import json
 
 from scipy.special import rel_entr
 from scipy.stats import kendalltau
@@ -79,18 +81,41 @@ class Recommender:
         # )
         # return recommendations
 
-    def evaluate_propensity_metrics(self, df, epsilon=0.5):
-        p_pred = self.predict(df)
-        p_true = df['propensity'].values
-        z_true = df['treated'].values
+import torch.nn.functional as F
 
-        z_pred = (p_pred >= epsilon).astype(int)
-        p_pred = np.clip(p_pred, 1e-4, 1 - 1e-4)
-        p_true = np.clip(p_true, 1e-4, 1 - 1e-4)
+from scipy.stats import kendalltau
+from sklearn.metrics import f1_score
+from scipy.stats import entropy
 
-        kld = np.mean(rel_entr(p_true, p_pred))
-        tau, _ = kendalltau(p_true, p_pred)
-        f1 = f1_score(z_true, z_pred)
+def predict_z(df_train, df_val, epsilon=0.2):
+    p_train = df_train['pred'].values
+    norm_mean = float(p_train.mean())
+    norm_std = float(p_train.std())
+    
+    p_pred = df_val['pred'].values
 
-        print(f"KLD: {kld:.4f}, Tau: {tau:.4f}, F1: {f1:.4f}")
-        return {'kld': kld, 'tau': tau, 'f1': f1}
+    p_norm = (p_pred - norm_mean) / norm_std
+    z_pred = (p_norm >= epsilon).astype(int)
+    return z_pred
+
+def get_propensity_metrics(df_train, df_val, epsilon=0.2):
+    """
+    Оценка качества предсказания propensity scores:
+    - KLD между истинным p_true и предсказанным p_pred,
+    - Kendall’s Tau между ними,
+    - F1-score бинарной классификации exposure с порогом epsilon.
+    """
+    p_pred = df_val['pred'].values
+    p_true = df_val['propensity'].values
+
+    z_true = df_val['treated'].values
+    z_pred = predict_z(df_train, df_val)
+    
+    p_pred = np.clip(p_pred, 1e-6, 1 - 1e-6)
+    p_true = np.clip(p_true, 1e-6, 1 - 1e-6)
+
+    kld = entropy(p_true, p_pred)
+    tau, _ = kendalltau(p_true, p_pred)
+    f1 = f1_score(z_true, z_pred)
+    
+    return {'kld': kld, 'tau': tau, 'f1': f1}

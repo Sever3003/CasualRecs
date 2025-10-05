@@ -43,7 +43,7 @@ class DLCE(Recommender, nn.Module):
         self.with_outcome = with_outcome
         self.only_treated = only_treated
         self.device = torch.device(device)
-        self.tau_mode = tau_mode
+        self.tau_mode = tau_mode  # ips, cips, naive
 
         self.seed = seed
         torch.manual_seed(self.seed or 42)
@@ -97,7 +97,6 @@ class DLCE(Recommender, nn.Module):
             pos_loss = pos_weight * F.softplus(-self.omega * s_uij[pos_mask])
             neg_loss = neg_weight * F.softplus(self.omega * s_uij[neg_mask])
             loss = pos_loss.sum() + neg_loss.sum()
-
         elif self.metric == 'upper_bound_sigmoid':
             sig = torch.sigmoid(self.omega * s_uij)
             sig_inv = torch.sigmoid(-self.omega * s_uij)
@@ -105,7 +104,6 @@ class DLCE(Recommender, nn.Module):
             loss[pos_mask] = pos_weight * sig[pos_mask] * sig_inv[pos_mask]
             loss[neg_mask] = neg_weight * sig[neg_mask] * sig_inv[neg_mask]
             loss = loss.sum()
-
         elif self.metric == 'upper_bound_hinge':
             loss = torch.zeros_like(s_uij)
 
@@ -126,7 +124,8 @@ class DLCE(Recommender, nn.Module):
             loss[neg_mask_hinge] = neg_weight * (1 + self.omega * s_uij[neg_mask_hinge])
 
             loss = loss.sum()
-
+        else:
+            raise ValueError(f"Unknown metric: {self.metric}")
 
         return loss
 
@@ -202,7 +201,7 @@ class DLCE(Recommender, nn.Module):
     
 
 
-    def predict(self, df: pd.DataFrame, batch_size: int = 512) -> np.ndarray:
+    def predict(self, df: pd.DataFrame, batch_size: int = 4096) -> np.ndarray:
         self.eval()
         preds = []
 
