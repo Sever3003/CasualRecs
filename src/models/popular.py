@@ -19,5 +19,8 @@ class PopularBase(Recommender):
     def fit(self, df, iter=1):
         self.item_mean_outcome = df.groupby(self.colname_item)[self.colname_outcome].mean().to_dict()
 
+
     def predict(self, df):
         return df[self.colname_item].apply(lambda x: self.item_mean_outcome.get(x, 0.0)).values
+
+    

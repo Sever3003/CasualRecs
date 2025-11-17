@@ -2,6 +2,10 @@ import numpy as np
 import pandas as pd
 import re
 
+from scipy.stats import kendalltau
+from sklearn.metrics import f1_score
+from scipy.stats import entropy
+
 class Evaluator:
     def __init__(self,
                  colname_user='idx_user', colname_item='idx_item', colname_time='idx_time',
@@ -28,6 +32,28 @@ class Evaluator:
             df.loc[treated & (df[self.colname_propensity] < cap_prop), self.colname_propensity] = cap_prop
             df.loc[control & (df[self.colname_propensity] > 1 - cap_prop), self.colname_propensity] = 1 - cap_prop
         return df
+    
+    def get_propensity_metrics(self, df, epsilon=0.5):
+        """
+        Оценка качества предсказания propensity scores:
+        - KLD между истинным p_true и предсказанным p_pred,
+        - Kendall’s Tau между ними,
+        - F1-score бинарной классификации exposure с порогом epsilon.
+        """
+        p_pred = df[self.colname_prediction].values
+        p_true = df[self.colname_propensity].values
+        z_true = df[self.colname_treatment].values
+
+        z_pred = (p_pred >= epsilon).astype(int)
+        # избежать нулевых или единичных вероятностей
+        p_pred = np.clip(p_pred, 1e-4, 1 - 1e-4)
+        p_true = np.clip(p_true, 1e-4, 1 - 1e-4)
+
+        kld = entropy(p_true, p_pred)
+        tau, _ = kendalltau(p_true, p_pred)
+        f1 = f1_score(z_true, z_pred)
+        
+        return {'kld': kld, 'tau': tau, 'f1': f1}
 
     def evaluate(self, df_origin, measures, mode='ASIS', cap_prop=None):
         if isinstance(measures, str):

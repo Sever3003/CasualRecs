@@ -265,32 +265,109 @@ func_cnt_logs <- function(hist_outcomes, hist_treatments, ref_users, ref_items){
   return(cnt_logs)
 }
 
+# func_conv_index <- function(cnt_logs){
+#   unique_users <- sort(unique(cnt_logs$user_id))
+#   unique_items <- sort(unique(cnt_logs$item_id))
+#   func_print_log(paste0("Number of unique users: ", length(unique_users)), with_time=F)
+#   func_print_log(paste0("Number of unique items: ", length(unique_items)), with_time=F)
+#   cnt_logs$idx_user <- as.integer(factor(cnt_logs$user_id, levels = unique_users)) - 1
+#   cnt_logs$idx_item <- as.integer(factor(cnt_logs$item_id, levels = unique_items)) - 1
+#   return(cnt_logs)
+# }
+
 func_conv_index <- function(cnt_logs){
+  # уникальные id
   unique_users <- sort(unique(cnt_logs$user_id))
   unique_items <- sort(unique(cnt_logs$item_id))
-  func_print_log(paste0("Number of unique users: ", length(unique_users)), with_time=F)
-  func_print_log(paste0("Number of unique items: ", length(unique_items)), with_time=F)
-  cnt_logs$idx_user <- as.integer(factor(cnt_logs$user_id, levels = unique_users)) - 1
-  cnt_logs$idx_item <- as.integer(factor(cnt_logs$item_id, levels = unique_items)) - 1
-  return(cnt_logs)
-}
 
+  func_print_log(paste0("Number of unique users: ", length(unique_users)), with_time=FALSE)
+  func_print_log(paste0("Number of unique items: ", length(unique_items)), with_time=FALSE)
+
+  # индексация
+  cnt_logs[, idx_user := as.integer(factor(user_id, levels = unique_users)) - 1L]
+  cnt_logs[, idx_item := as.integer(factor(item_id, levels = unique_items)) - 1L]
+
+  # карты соответствий
+  map_users <- data.table(user_id = unique_users,
+                          idx_user = 0:(length(unique_users)-1L))
+  map_items <- data.table(item_id = unique_items,
+                          idx_item = 0:(length(unique_items)-1L))
+
+  # вернуть всё разом
+  list(
+    cnt_logs = cnt_logs[, .(idx_user, idx_item, num_visit, num_treatment, num_outcome, num_treated_outcome)],
+    map_users = map_users,
+    map_items = map_items
+  )
+}
 
 
 ## execute
 # category level
-by_category <- TRUE
+# by_category <- TRUE
 
-t <- proc.time() # 
+# t <- proc.time() # 
+# list_dataset <- func_prepare_dunnhumby(path_dir, min_time_user, min_time_item, 
+#                                        min_time_user_treatment, min_time_item_treatment,
+#                                        min_item_treated_outcome, min_item_control_outcome,
+#                                        type_recommendation, by_category, 
+#                                        filter_data_by_promotion_existence, filter_data_by_active_store)
+
+# cnt_logs <- func_cnt_logs(list_dataset$hist_outcomes, list_dataset$hist_treatments,
+#                           list_dataset$ref_users, list_dataset$ref_items)
+# cnt_logs <- func_conv_index(cnt_logs)
+# proc.time() - t
+
+by_category <- TRUE
+t <- proc.time()
 list_dataset <- func_prepare_dunnhumby(path_dir, min_time_user, min_time_item, 
                                        min_time_user_treatment, min_time_item_treatment,
                                        min_item_treated_outcome, min_item_control_outcome,
                                        type_recommendation, by_category, 
                                        filter_data_by_promotion_existence, filter_data_by_active_store)
 
-cnt_logs <- func_cnt_logs(list_dataset$hist_outcomes, list_dataset$hist_treatments,
-                          list_dataset$ref_users, list_dataset$ref_items)
-cnt_logs <- func_conv_index(cnt_logs)
+cnt_logs_raw <- func_cnt_logs(list_dataset$hist_outcomes, list_dataset$hist_treatments,
+                              list_dataset$ref_users, list_dataset$ref_items)
+conv <- func_conv_index(cnt_logs_raw)
+cnt_logs <- conv$cnt_logs
+map_users <- conv$map_users
+map_items <- conv$map_items  # item_id = "COMMODITY::SUB"
+
+# 1) Берём метаданные по item_id (они уже на уровне категорий после func_conv_item_id)
+ref_items_meta <- unique(
+  list_dataset$ref_items[
+    , .(item_id, SUB_COMMODITY_DESC, COMMODITY_DESC, BRAND, MANUFACTURER, DEPARTMENT, CURR_SIZE_OF_PRODUCT)
+  ],
+  by = "item_id"
+)
+
+# 2) Сливаем БЕЗ предварительного tstrsplit, чтобы не получить .x/.y
+setkey(map_items, "item_id")
+setkey(ref_items_meta, "item_id")
+map_items <- merge(map_items, ref_items_meta, all.x = TRUE)  # теперь нет .x/.y
+
+# 3) Если вдруг где-то метаданные пустые, аккуратно добиваем из item_id
+na_rows <- is.na(map_items$SUB_COMMODITY_DESC) | is.na(map_items$COMMODITY_DESC)
+if (any(na_rows)) {
+  tmp <- tstrsplit(map_items[na_rows, item_id], "::", fixed = TRUE)
+  map_items[na_rows, COMMODITY_DESC := tmp[[1]]]
+  map_items[na_rows, SUB_COMMODITY_DESC := tmp[[2]]]
+}
+
+# 4) Фиксируем порядок и имена колонок как на product-уровне
+data.table::setcolorder(
+  map_items,
+  c("item_id","idx_item","SUB_COMMODITY_DESC","COMMODITY_DESC","BRAND","MANUFACTURER","DEPARTMENT","CURR_SIZE_OF_PRODUCT")
+)
+
+# 5) Сохраняем
+save_dir <- paste0("../../data/preprocessed/dunn_cat_", type_recommendation, 
+                   "_", min_time_user, "_", min_time_item, "_", min_time_user_treatment, "_", min_time_item_treatment)
+if(!dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
+
+fwrite(cnt_logs, file.path(save_dir, "cnt_logs.csv"))
+fwrite(map_items, file.path(save_dir, "items_map.csv"))
+fwrite(map_users, file.path(save_dir, "users_map.csv"))
 proc.time() - t
 
 
@@ -309,17 +386,46 @@ write.csv(cnt_logs[, .(idx_user, idx_item, num_visit, num_treatment, num_outcome
           save_name, row.names=F)
 
 # product level
+# by_category <- FALSE
+# t <- proc.time() # 
+# list_dataset <- func_prepare_dunnhumby(path_dir, min_time_user, min_time_item, 
+#                                        min_time_user_treatment, min_time_item_treatment,
+#                                        min_item_treated_outcome, min_item_control_outcome,
+#                                        type_recommendation, by_category, 
+#                                        filter_data_by_promotion_existence, filter_data_by_active_store)
+
+# cnt_logs <- func_cnt_logs(list_dataset$hist_outcomes, list_dataset$hist_treatments,
+#                           list_dataset$ref_users, list_dataset$ref_items)
+# cnt_logs <- func_conv_index(cnt_logs)
+# proc.time() - t
 by_category <- FALSE
-t <- proc.time() # 
+t <- proc.time()
 list_dataset <- func_prepare_dunnhumby(path_dir, min_time_user, min_time_item, 
                                        min_time_user_treatment, min_time_item_treatment,
                                        min_item_treated_outcome, min_item_control_outcome,
                                        type_recommendation, by_category, 
                                        filter_data_by_promotion_existence, filter_data_by_active_store)
 
-cnt_logs <- func_cnt_logs(list_dataset$hist_outcomes, list_dataset$hist_treatments,
-                          list_dataset$ref_users, list_dataset$ref_items)
-cnt_logs <- func_conv_index(cnt_logs)
+cnt_logs_raw <- func_cnt_logs(list_dataset$hist_outcomes, list_dataset$hist_treatments,
+                              list_dataset$ref_users, list_dataset$ref_items)
+conv <- func_conv_index(cnt_logs_raw)
+cnt_logs <- conv$cnt_logs
+map_users <- conv$map_users
+map_items <- conv$map_items  # item_id здесь = PRODUCT_ID
+
+# обогатим из ref_items (там item_id = PRODUCT_ID после rename)
+ref_items_meta <- unique(list_dataset$ref_items[, .(item_id, SUB_COMMODITY_DESC, COMMODITY_DESC, BRAND, MANUFACTURER, DEPARTMENT, CURR_SIZE_OF_PRODUCT)], by = "item_id")
+setkey(map_items, "item_id")
+setkey(ref_items_meta, "item_id")
+map_items <- merge(map_items, ref_items_meta, all.x = TRUE)
+
+save_dir <- paste0("../../data/preprocessed/dunn_", type_recommendation, 
+                   "_", min_time_user, "_", min_time_item, "_", min_time_user_treatment, "_", min_time_item_treatment)
+if(!dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
+
+fwrite(cnt_logs, file.path(save_dir, "cnt_logs.csv"))
+fwrite(map_items, file.path(save_dir, "items_map.csv"))   # << важная мапа idx_item -> PRODUCT_ID (+meta)
+fwrite(map_users, file.path(save_dir, "users_map.csv"))
 proc.time() - t
 
 
