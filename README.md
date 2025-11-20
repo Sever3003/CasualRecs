@@ -33,7 +33,9 @@
 
 Код для генерации датасетов основан на реализации из репозитория [wonhyung64/causal](https://github.com/wonhyung64/causal) — где исправлена ошибка оригинальной статьи DLCE при создании персонализированных датасетов.
 
-После подготовки данных была реализована утилита:
+### Код загрузки данных перед запуском моделей
+
+Перед тем как обучать модели, необходимо предварительно загрузить обработанные датасеты, содержащую train/vali/test разбиения и метаданные. Для этого была написана отдельная функция, которая выгружает датасет по его названию уже в нужном для нас виде:
 
 ```python
 train_df, vali_df, test_df, num_users, num_items, item_pop = get_dataset(
@@ -53,11 +55,29 @@ a `path_to_data` - это путь до папки 'data'.
 
 Функция возвращает полностью подготовленные объекты:
 
-* **train_df**, **vali_df**, **test_df** — финальные выборки в формате DataFrame
-* **num_users**, **num_items** — размеры пользовательского и товарного словарей
-* **item_pop** — вектор популярности товаров
+**train_df**, **vali_df**, **test_df** — финальные выборки в формате DataFrame
+**num_users**, **num_items** — размеры пользовательского и товарного словарей
+**item_pop** — вектор популярности товаров
 
-Эти структуры данных готовы к непосредственному использованию в моделях рекомендательных систем.
+Эти структуры данных готовы к непосредственному использованию в моделях рекомендательных систем. Ниже приведён минимальный пример корректной инициализации для датасета CO:
+
+```python
+import os
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from tqdm import tqdm
+
+from src import *
+
+
+# Загрузка датасетa CO
+train_df, vali_df, test_df, num_users, num_items, item_pop = get_dataset(
+    'CO',
+    path_to_data="."
+)
+
+```
 
 ## Модели
 
@@ -83,8 +103,18 @@ a `path_to_data` - это путь до папки 'data'.
 
 ### Пример использования PropCare
 
+### Пример использования PropCare
+
+Ниже приведён пример полной цепочки: загрузка датасета, инициализация PropCare, обучение, сохранение/загрузка модели, получение предсказаний и расчёт пропенсити-метрик (KLD, τ, F1).
+
 ```python
-# Определяем конфигурацию
+# Загрузка подготовленного датасета CO
+train_df, vali_df, test_df, num_users, num_items, item_pop = get_dataset(
+    "CO",
+    path_to_data="."
+)
+
+# Определяем конфигурацию модели
 class Args:
     dimension = 128
     embedding_layer_units = [256, 128, 64]
@@ -95,21 +125,125 @@ class Args:
 args = Args()
 
 # Инициализация модели PropCare на датасете CO
-model = PropCare(
-    all_datasets['CO']['num_users'],
-    all_datasets['CO']['num_items'],
+propcare_model = PropCare(
+    num_users=num_users,
+    num_items=num_items,
     args=args,
-    item_popularity=all_datasets['CO']['item_popularity'],
+    item_popularity=item_pop,
     device='cuda'
 )
 
 # Обучение модели
-model.fit(
-    all_datasets['CO']['train'],
-    all_datasets['CO']['vali'],
+propcare_model.fit(
+    train_df,
+    vali_df,
     batch_size=4096,
     epochs=25
 )
 
 # Сохранение модели
-model.save_model("saved_models/propcare/propcare_model")
+propcare_model.save_model(
+    dir_path="saved_models/propcare",
+    model_name="propcare_model"
+)
+
+# Загрузка модели
+propcare_model = PropCare.load_model(
+    dir_path="saved_models/propcare",
+    model_name="propcare_model",
+    device='cuda'
+)
+
+# Предсказания на тестовой выборке
+preds = propcare_model.predict(test_df)
+
+# Расчёт пропенсити-метрик (KLD, τ, F1)
+value = propcare_model.get_metrics(test_df, epsilon=0.2)
+```
+
+### DLCE
+
+Для начала необходимо определить конфигурацию модели и задать аргументы.
+
+#### Основные параметры модели DLCE
+
+| Параметр | Источник / значение | Описание |
+|----------|---------------------|----------|
+| **dim_factor** | `dim_factor` *(по умолчанию `100`)* | Размерность эмбеддингов пользователей и объектов. |
+| **metric** | `metric` *(по умолчанию `'upper_bound_log'`)* | Тип метрики / целевой функции, используемой в DLCE. |
+| **learn_rate** | `learn_rate` *(по умолчанию `0.001`)* | Скорость обучения (learning rate). |
+| **reg_factor** | `reg_factor` *(по умолчанию `0.01`)* | L2-регуляризация для латентных факторов. |
+| **reg_bias** | `reg_bias` *(по умолчанию `0.01`)* | L2-регуляризация для bias. |
+| **omega** | `omega` *(по умолчанию `0.05`)* | Гиперпараметр, контролирующий степень корректировки смещения. |
+| **xT** | `xT` *(по умолчанию `0.01`)* | Параметр обработки treated-части выборки. |
+| **xC** | `xC` *(по умолчанию `0.01`)* | Параметр обработки control-части выборки. |
+| **with_bias** | `with_bias` *(по умолчанию `True`)* | Включение user/item bias и глобального смещения. |
+| **with_outcome** | `with_outcome` *(по умолчанию `True`)* | Использовать ли фактический outcome при обучении. |
+| **only_treated** | `only_treated` *(по умолчанию `False`)* | Использовать ли только объекты с `treated = 1` при обучении. |
+| **tau_mode** | `tau_mode` *(по умолчанию `'cips'`)* | Режим корректировки propensity: `'ips'`, `'cips'`, `'naive'`. |
+| **seed** | `seed` *(по умолчанию `None`)* | Seed инициализации (если `None`, используется `42`). |
+| **device** | `device` *(по умолчанию `'cuda'`)* | Устройство для обучения: `'cuda'` или `'cpu'`. |
+| **measures** | `measures` *(по умолчанию ['CPrec_10', 'CPrec_100', 'CDCG_100', 'CDCG'])* | Метрики, вычисляемые при оценке модели. |
+
+---
+
+### Пример использования DLCE
+
+### Пример использования DLCE
+
+Ниже приведён пример инициализации, обучения, сохранения и загрузки модели **DLCE**  с использованием набора параметров.
+
+```python
+params = {
+    "dim_factor": 100,
+    "metric": "upper_bound_log",
+    "learn_rate": 0.001,
+    "reg_factor": 0.01,
+    "reg_bias": 0.01,
+    "omega": 0.05,
+    "xT": 0.01,
+    "xC": 0.01,
+    "tau_mode": "cips",
+    "with_bias": True,
+    "with_outcome": True,
+    "only_treated": False
+}
+
+
+# Инициализация DLCE на датасете CO
+dlce_model = DLCE(
+    num_users=num_users,
+    num_items=num_items,
+    device='cuda',
+    **params
+)
+
+# Обучение модели на датасете CO
+dlce_model.fit(
+    train_df,
+    vali_df,
+    n_epochs=40,
+    batch_size=512
+)
+
+# Сохранение модели
+dlce_model.save_model(
+    dir_path=f"saved_models/dlce/",
+    model_name="model"
+)
+
+# Загрузка сохранённой модели
+dlce_model = DLCE.load_model(
+    dir_path=f"saved_models/dlce/",
+    model_name="model",
+    device='cuda'
+)
+
+# Предсказания
+test_df[f"DLCE_pred"] = dlce_model.predict(test_df)
+
+# Считаем метрики
+evaluator = Evaluator()
+evaluator.evaluate(test_df.rename(columns={"DLCE_pred": "pred"}), measures=['CPrec_10', 'CPrec_100', 'CDCG', 'CDCG_100'])
+```
+
