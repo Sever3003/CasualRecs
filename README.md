@@ -4,7 +4,7 @@
 
 ## Требования
 
-- Проект разработан и тестировался на Python 3.10
+- Проект разработан и тестировался на Python 3.10 в линукс системе.
 - Все зависимости перечислены в файле environment.yml. Для начала создайте окружение и скачайте туда основные зависимости:
   ```bash
   conda env create -n uplift_env -f environment.yml
@@ -20,12 +20,12 @@
 
 ## Датасет: Dunnhumby — The Complete Journey
 
-Используем оригинальные данные **Dunnhumby: The Complete Journey** https://www.dunnhumby.com/source-files/
+Используем оригинальные данные [**Dunnhumby: The Complete Journey**](https://www.dunnhumby.com/source-files/)
 
 ### Подготовка данных
 
 1. Скачайте с официального сайта данные и поместите их в папку: `./data/raw/`.
-2. Запусти `create_dataset.ipynb` и выполни все ячейки (в новом окружении uplift_env).
+2. Запусти `uplift/data/data.ipynb` и выполни все ячейки (в новом окружении uplift_env).
 3. Результатом станут четыре подготовленных папки с CSV‑файлами, размещённые в папке `data/preprocessed/`:
 
 | Набор данных               | Файл                                   |
