@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uplift"
+version = "0.1.0"
+description = "Uplift modeling and recommendation algorithms"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Ekaterina Severina"},
+]
+
+
+[tool.setuptools.packages.find]
+where = ["."]
